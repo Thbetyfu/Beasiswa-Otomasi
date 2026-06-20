@@ -54,6 +54,8 @@ HEADER_ALIASES = {
     'nilai_sertifikat': 'nilai',
     'ai_status': 'ai_status',           'status_ai': 'ai_status',
     'ai_notes': 'ai_notes',             'keterangan_ai': 'ai_notes',
+    'komentar': 'komentar',             'comment': 'komentar',
+    'catatan': 'komentar',              'notes': 'komentar',
 }
 
 DISPLAY_LABELS = {
@@ -206,8 +208,16 @@ class ScoringApp:
                                      font=("Segoe UI", 14))
         self.nilai_entry.grid(row=0, column=1, sticky=tk.W)
 
+        ttk.Label(score_frame, text="Komentar:", font=("Segoe UI", 11, "bold")).grid(
+            row=1, column=0, sticky=tk.W, padx=(0, 8), pady=(8, 0))
+        self.komentar_var = tk.StringVar()
+        self.komentar_entry = ttk.Entry(score_frame, textvariable=self.komentar_var, width=35,
+                                        font=("Segoe UI", 11))
+        self.komentar_entry.grid(row=1, column=1, columnspan=2, sticky=tk.EW, pady=(8, 0))
+        score_frame.columnconfigure(1, weight=1)
+
         btn_row = ttk.Frame(score_frame)
-        btn_row.grid(row=1, column=0, columnspan=3, pady=(12, 0))
+        btn_row.grid(row=2, column=0, columnspan=3, pady=(12, 0))
 
         self.btn_save = ttk.Button(btn_row, text="Save & Next", command=self._save_and_next, state=tk.DISABLED)
         self.btn_save.pack(side=tk.LEFT, padx=(0, 6))
@@ -806,6 +816,7 @@ class ScoringApp:
                     'is_pdf': '.pdf' in url.lower(),
                     'ai_status': _get('ai_status') or '',
                     'ai_notes': _get('ai_notes') or '',
+                    'komentar': _get('komentar'),
                 })
 
             if not items:
@@ -909,8 +920,9 @@ class ScoringApp:
         ai_notes = item.get('ai_notes', '') or '-'
         self._update_ai_status_ui(ai_status, ai_notes)
 
-        # Update nilai field
+        # Update nilai and komentar fields
         self.nilai_var.set(item.get('nilai', ''))
+        self.komentar_var.set(item.get('komentar', ''))
 
         # Update progress
         remaining = self.total_items - self.scored_count
@@ -1253,6 +1265,7 @@ class ScoringApp:
                     item['ai_status'] = 'ERROR'
                     item['ai_notes'] = f"Gagal download: {e}"
                     item['nilai'] = '0'
+                    item['komentar'] = f"AI: Gagal mengunduh sertifikat. {e}"
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
@@ -1269,6 +1282,7 @@ class ScoringApp:
                     item['ai_status'] = 'ERROR'
                     item['ai_notes'] = f"Gagal baca PDF: {e}"
                     item['nilai'] = '0'
+                    item['komentar'] = f"AI: Gagal membaca PDF. {e}"
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
@@ -1280,6 +1294,7 @@ class ScoringApp:
                     item['ai_status'] = 'ERROR'
                     item['ai_notes'] = f"Gagal baca gambar: {e}"
                     item['nilai'] = '0'
+                    item['komentar'] = f"AI: Gagal membaca gambar. {e}"
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
@@ -1293,6 +1308,7 @@ class ScoringApp:
                         item['ai_status'] = 'ERROR'
                         item['ai_notes'] = f"Vision model error: {e}"
                         item['nilai'] = '0'
+                        item['komentar'] = f"AI: Model visi error. {e}"
                         self.root.after(0, self._show_current)
                         self._save_session()
                         continue
@@ -1300,6 +1316,7 @@ class ScoringApp:
                     item['ai_status'] = 'UNREADABLE'
                     item['ai_notes'] = "Ollama model not available"
                     item['nilai'] = '0'
+                    item['komentar'] = "AI: Model Ollama tidak tersedia."
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
@@ -1333,17 +1350,21 @@ class ScoringApp:
                         )
                         item['nilai'] = str(score)
                         item['ai_notes'] = f"[{method}] {notes} (Skor: {score})"
+                        item['komentar'] = f"AI: Terverifikasi. {notes}."
                     else:
                         item['nilai'] = '0'
                         item['ai_notes'] = f"[{method}] Mismatch: {notes}"
+                        item['komentar'] = f"AI: Mismatch. {notes}."
                 except Exception as e:
                     item['ai_status'] = 'ERROR'
                     item['ai_notes'] = f"Verify logic error: {e}"
                     item['nilai'] = '0'
+                    item['komentar'] = f"AI: Error logika verifikasi. {e}"
             else:
                 item['ai_status'] = 'UNREADABLE'
                 item['ai_notes'] = "No text found in certificate"
                 item['nilai'] = '0'
+                item['komentar'] = "AI: Teks tidak ditemukan dalam sertifikat."
                 
             if item.get('nilai'):
                 self.scored_count += 1
@@ -1403,8 +1424,15 @@ class ScoringApp:
         if not ok:
             messagebox.showwarning("Invalid Score", msg)
             return False
-        old_val = self.items[self.current_idx]['nilai']
+
+        komentar = self.komentar_var.get().strip()
+        if not komentar:
+            messagebox.showwarning("Invalid Comment", "Komentar wajib diisi sebelum lanjut.")
+            return False
+
+        old_val = self.items[self.current_idx].get('nilai')
         self.items[self.current_idx]['nilai'] = val
+        self.items[self.current_idx]['komentar'] = komentar
         if not old_val:
             self.scored_count += 1
         self._save_session()
@@ -1441,9 +1469,11 @@ class ScoringApp:
     def _clear_score(self):
         if not self.items:
             return
-        old_val = self.items[self.current_idx]['nilai']
+        old_val = self.items[self.current_idx].get('nilai')
         self.items[self.current_idx]['nilai'] = ''
+        self.items[self.current_idx]['komentar'] = ''
         self.nilai_var.set('')
+        self.komentar_var.set('')
         if old_val:
             self.scored_count -= 1
         self._save_session()
@@ -1466,7 +1496,8 @@ class ScoringApp:
             if not ok:
                 messagebox.showwarning("Invalid Score", msg)
                 return
-            self._apply_score()
+            if not self._apply_score():
+                return
         else:
             messagebox.showwarning("No Score", "Please enter a nilai (0-20) before proceeding.")
             return
@@ -1678,11 +1709,19 @@ class ScoringApp:
         ttk.Entry(edit_frame, textvariable=_nil_sv, width=12).grid(
             row=5, column=1, sticky=tk.W, padx=(0, 10), pady=2)
 
+        # Komentar row
+        ttk.Label(edit_frame, text="Komentar:", font=("Segoe UI", 9, "bold")).grid(
+            row=6, column=0, sticky=tk.W, padx=(0, 4), pady=2)
+        _kom_sv = tk.StringVar()
+        _dv_edits['komentar'] = _kom_sv
+        ttk.Entry(edit_frame, textvariable=_kom_sv, width=80).grid(
+            row=6, column=1, columnspan=3, sticky=tk.EW, padx=(0, 10), pady=2)
+
         edit_frame.columnconfigure(1, weight=1)
 
         # Buttons
         btn_r = ttk.Frame(edit_frame)
-        btn_r.grid(row=6, column=0, columnspan=4, pady=(10, 0))
+        btn_r.grid(row=7, column=0, columnspan=4, pady=(10, 0))
 
         def _dv_select(_evt=None):
             sel = tree.selection()
@@ -1707,6 +1746,11 @@ class ScoringApp:
                         raise ValueError("out of range")
                 except ValueError:
                     messagebox.showwarning("Invalid Nilai", "Nilai must be a number between 0 and 20.")
+                    return
+                # Wajib komentar jika ada nilai
+                kom_val = _dv_edits['komentar'].get().strip()
+                if not kom_val:
+                    messagebox.showwarning("Invalid Comment", "Komentar wajib diisi jika ada nilai.")
                     return
             old_nil = self.items[idx].get('nilai', '')
             for k, sv in _dv_edits.items():
@@ -2138,7 +2182,7 @@ class ScoringApp:
             ws.title = "Penilaian Sertifikat"
 
             headers = ["Keterangan Juara", "Level Certificate", "Yang Buat Acara",
-                       "Nama Sertifikat", "Link", "Nilai", "AI Status", "AI Notes"]
+                       "Nama Sertifikat", "Link", "Nilai", "AI Status", "AI Notes", "Komentar"]
             for c, h in enumerate(headers, 1):
                 cell = ws.cell(row=1, column=c, value=h)
                 cell.font = openpyxl.styles.Font(bold=True)
@@ -2157,6 +2201,7 @@ class ScoringApp:
                         ws.cell(row=r, column=6, value=nilai_val)
                 ws.cell(row=r, column=7, value=item.get('ai_status', ''))
                 ws.cell(row=r, column=8, value=item.get('ai_notes', ''))
+                ws.cell(row=r, column=9, value=item.get('komentar', ''))
 
             # Auto-width columns
             for col in ws.columns:
