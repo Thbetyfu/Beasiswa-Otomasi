@@ -104,9 +104,7 @@ class ScoringApp:
         self.btn_view_data.pack(side=tk.LEFT, padx=(0, 6))
         self.btn_sessions = ttk.Button(toolbar, text="Sessions", command=self._open_session_manager)
         self.btn_sessions.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_auto_score = ttk.Button(toolbar, text="Auto-Score All", command=self._auto_score_all, state=tk.DISABLED)
-        self.btn_auto_score.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_ai_verify = ttk.Button(toolbar, text="Run AI Verify", command=self._run_ai_verify, state=tk.DISABLED)
+        self.btn_ai_verify = ttk.Button(toolbar, text="Analisis AI", command=self._run_ai_verify, state=tk.DISABLED)
         self.btn_ai_verify.pack(side=tk.LEFT, padx=(0, 20))
 
         self.lbl_progress = ttk.Label(toolbar, text="Import or load a session", font=("Segoe UI", 11))
@@ -862,7 +860,7 @@ class ScoringApp:
     def _enable_scoring_buttons(self):
         for btn in [self.btn_gallery, self.btn_save, self.btn_skip, self.btn_clear,
                     self.btn_first, self.btn_prev, self.btn_next, self.btn_last,
-                    self.btn_auto_score, self.btn_ai_verify]:
+                    self.btn_ai_verify]:
             btn.config(state=tk.NORMAL)
         # Export is controlled by _update_export_state (only when all scored)
         self._update_export_state()
@@ -1105,65 +1103,86 @@ class ScoringApp:
         
         self.lbl_ai_notes.config(text=notes)
 
-    def _auto_score_all(self):
-        if not self.items:
-            return
-        if not messagebox.askyesno("Auto-Score All", 
-                                   "Are you sure you want to auto-score all items based on automated rules?\n\n"
-                                   "This will overwrite any currently entered scores."):
-            return
-        
-        try:
-            from scripts.scoring import classify_championship
-        except ImportError:
-            import sys
-            scripts_dir = os.path.join(get_app_dir(), 'scripts')
-            if scripts_dir not in sys.path:
-                sys.path.append(scripts_dir)
-            try:
-                from scoring import classify_championship
-            except ImportError as e:
-                messagebox.showerror("Import Error", f"Could not load scripts/scoring.py:\n{e}")
-                return
+    def _extract_fields_from_text(self, text):
+        text_lower = text.lower()
+        level = ""
+        if any(kw in text_lower for kw in ['internasional', 'international', 'world', 'global', 'asean']):
+            level = "Internasional"
+        elif any(kw in text_lower for kw in ['nasional', 'national', 'republik indonesia', 'ri ']):
+            level = "Nasional"
+        elif any(kw in text_lower for kw in ['provinsi', 'provincial', 'regional', 'wilayah']):
+            level = "Provinsi"
+        elif any(kw in text_lower for kw in ['kota', 'kabupaten', 'municipal', 'district']):
+            level = "Kota/Kabupaten"
+            
+        championship = ""
+        if any(kw in text_lower for kw in ['juara 1', 'juara i ', 'juara i\b', '1st place', 'first place', 'gold medal', 'medali emas']):
+            championship = "Juara 1"
+        elif any(kw in text_lower for kw in ['juara 2', 'juara ii', '2nd place', 'second place', 'silver medal', 'medali perak']):
+            championship = "Juara 2"
+        elif any(kw in text_lower for kw in ['juara 3', 'juara iii', '3rd place', 'third place', 'bronze medal', 'medali perunggu']):
+            championship = "Juara 3"
+        elif 'harapan' in text_lower:
+            championship = "Harapan"
+        elif 'finalis' in text_lower or 'finalist' in text_lower:
+            championship = "Finalis"
+        elif any(kw in text_lower for kw in ['peserta', 'participant', 'partisipasi']):
+            championship = "Peserta"
+            
+        return level, championship
 
-        self.scored_count = 0
-        for item in self.items:
-            champ = item.get('championship', '')
-            lvl = item.get('level', '')
-            org = item.get('organizer', '')
-            name = item.get('cert_name', '')
-            
-            score, flag = classify_championship(champ, lvl, org, name)
-            item['nilai'] = str(score)
-            if flag:
-                item['ai_status'] = 'PERLU_VERIFIKASI' if 'VERIFIKASI' in flag else 'NOT_CHECKED'
-                item['ai_notes'] = flag
-            else:
-                item['ai_status'] = 'TERVERIFIKASI'
-                item['ai_notes'] = 'Auto-scored by rules engine'
-            
-            if item['nilai']:
-                self.scored_count += 1
-            
-        self._save_session()
-        self._show_current()
-        messagebox.showinfo("Auto-Score Complete", 
-                            f"Successfully auto-scored {len(self.items)} items.\n"
-                            f"Total scored items: {self.scored_count} / {len(self.items)}")
+    def _show_ai_progress_dialog(self, total):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Analisis AI sedang berjalan")
+        dialog.geometry("460x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        dialog.update_idletasks()
+        px = self.root.winfo_x() + (self.root.winfo_width() - 460) // 2
+        py = self.root.winfo_y() + (self.root.winfo_height() - 200) // 2
+        dialog.geometry(f"+{max(px,0)}+{max(py,0)}")
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: self._cancel_ai_verify(dialog))
+
+        ttk.Label(dialog, text="Analisis AI & Otomatisasi Nilai", font=("Segoe UI", 12, "bold")).pack(pady=(15, 10))
+
+        self.ai_lbl_status = ttk.Label(dialog, text="Menyiapkan analisis...", font=("Segoe UI", 10))
+        self.ai_lbl_status.pack(pady=2)
+
+        self.ai_progress_bar = ttk.Progressbar(dialog, length=380, mode='determinate')
+        self.ai_progress_bar.pack(pady=10)
+
+        self.ai_lbl_eta = ttk.Label(dialog, text="Estimasi Waktu Tersisa: Menghitung...", font=("Segoe UI", 9, "italic"))
+        self.ai_lbl_eta.pack(pady=2)
+
+        btn_cancel = ttk.Button(dialog, text="Batal (Cancel)", command=lambda: self._cancel_ai_verify(dialog))
+        btn_cancel.pack(pady=(10, 0))
+
+        self.ai_progress_dialog = dialog
+
+    def _cancel_ai_verify(self, dialog):
+        if messagebox.askyesno("Batalkan Analisis AI", "Apakah Anda yakin ingin membatalkan proses Analisis AI?"):
+            self.ai_cancel_requested = True
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
 
     def _run_ai_verify(self):
         if not self.items:
             return
-        if messagebox.askyesno("Run AI Verification", 
-                               "Run AI verification on all items in this session?\n\n"
-                               "This will check PDF text and use the Vision Model (Moondream) via local Ollama.\n"
-                               "It may take some time depending on your computer's speed."):
+        if messagebox.askyesno("Analisis AI & Otomatisasi Nilai", 
+                               "Jalankan Analisis AI dan pengisian nilai otomatis untuk semua item?\n\n"
+                               "Proses ini akan mengunduh sertifikat, membaca teks, mendeteksi kecocokan, "
+                               "dan mengisi nilai berdasarkan kriteria beasiswa secara otomatis."):
             self.btn_ai_verify.config(state=tk.DISABLED)
-            self.btn_auto_score.config(state=tk.DISABLED)
             threading.Thread(target=self._ai_verify_worker, daemon=True).start()
 
     def _ai_verify_worker(self):
         import sys
+        import time
         scripts_dir = os.path.join(get_app_dir(), 'scripts')
         if scripts_dir not in sys.path:
             sys.path.append(scripts_dir)
@@ -1171,8 +1190,9 @@ class ScoringApp:
         try:
             import requests
             from verify_agent import extract_text_pdf, extract_text_image, query_vision_model, verify_against_text
+            from scoring import classify_championship
         except ImportError as e:
-            self.root.after(0, lambda: messagebox.showerror("Import Error", f"Could not import verify_agent functions:\n{e}"))
+            self.root.after(0, lambda: messagebox.showerror("Import Error", f"Gagal mengimpor modul scripts:\n{e}"))
             self.root.after(0, self._enable_scoring_buttons)
             return
 
@@ -1186,15 +1206,39 @@ class ScoringApp:
         except Exception:
             pass
 
-        self.root.after(0, lambda: self.status_var.set("Starting AI Verification..."))
-        
         total = len(self.items)
+        self.ai_cancel_requested = False
+        start_time = time.time()
+        
+        self.root.after(0, lambda: self._show_ai_progress_dialog(total))
+
+        self.scored_count = 0
         for idx, item in enumerate(self.items):
-            if not self.root.winfo_exists():
+            if self.ai_cancel_requested:
+                self.root.after(0, lambda: self.status_var.set("Analisis AI dibatalkan oleh pengguna."))
+                self.root.after(0, self._enable_scoring_buttons)
                 return
+
+            completed = idx
+            elapsed = time.time() - start_time
+            if completed > 0:
+                avg_time = elapsed / completed
+                remaining_time = (total - completed) * avg_time
+                minutes = int(remaining_time // 60)
+                seconds = int(remaining_time % 60)
+                eta_text = f"Estimasi Waktu Tersisa: {minutes:02d} menit {seconds:02d} detik"
+            else:
+                eta_text = "Estimasi Waktu Tersisa: Menghitung..."
                 
-            self.root.after(0, lambda i=idx: self.status_var.set(f"Verifying AI item {i+1}/{total}..."))
-            self.root.after(0, lambda i=idx: self.progress_bar.config(value=i+1, maximum=total))
+            status_text = f"Menganalisis baris {idx+1} dari {total}..."
+            
+            def _update_ui(c=idx+1, s=status_text, e=eta_text):
+                if hasattr(self, 'ai_progress_dialog') and self.ai_progress_dialog.winfo_exists():
+                    self.ai_progress_bar.config(value=c)
+                    self.ai_lbl_status.config(text=s)
+                    self.ai_lbl_eta.config(text=e)
+                    
+            self.root.after(0, _update_ui)
             
             url = item['url']
             is_pdf = item['is_pdf']
@@ -1207,7 +1251,8 @@ class ScoringApp:
                     local_path = self._local_cert_path(idx)
                 except Exception as e:
                     item['ai_status'] = 'ERROR'
-                    item['ai_notes'] = f"Download failed: {e}"
+                    item['ai_notes'] = f"Gagal download: {e}"
+                    item['nilai'] = '0'
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
@@ -1222,7 +1267,8 @@ class ScoringApp:
                     method = "PDF_text" if cert_text else "PDF_vision"
                 except Exception as e:
                     item['ai_status'] = 'ERROR'
-                    item['ai_notes'] = f"PDF read error: {e}"
+                    item['ai_notes'] = f"Gagal baca PDF: {e}"
+                    item['nilai'] = '0'
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
@@ -1232,7 +1278,8 @@ class ScoringApp:
                     method = "image"
                 except Exception as e:
                     item['ai_status'] = 'ERROR'
-                    item['ai_notes'] = f"Image read error: {e}"
+                    item['ai_notes'] = f"Gagal baca gambar: {e}"
+                    item['nilai'] = '0'
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
@@ -1240,21 +1287,32 @@ class ScoringApp:
             if not cert_text and img_b64:
                 if has_vision:
                     try:
-                        self.root.after(0, lambda i=idx: self.status_var.set(f"Running Vision model for item {i+1}/{total}..."))
+                        self.root.after(0, lambda i=idx: self.status_var.set(f"Menjalankan model visi untuk item {i+1}..."))
                         cert_text = query_vision_model(img_b64)
                     except Exception as e:
                         item['ai_status'] = 'ERROR'
                         item['ai_notes'] = f"Vision model error: {e}"
+                        item['nilai'] = '0'
                         self.root.after(0, self._show_current)
                         self._save_session()
                         continue
                 else:
                     item['ai_status'] = 'UNREADABLE'
                     item['ai_notes'] = "Ollama model not available"
+                    item['nilai'] = '0'
                     self.root.after(0, self._show_current)
                     self._save_session()
                     continue
-                    
+            
+            ai_level, ai_championship = "", ""
+            if cert_text:
+                ai_level, ai_championship = self._extract_fields_from_text(cert_text)
+
+            if not item.get('level') and ai_level:
+                item['level'] = ai_level
+            if not item.get('championship') and ai_championship:
+                item['championship'] = ai_championship
+
             if cert_text:
                 student_data = {
                     'organizer': item.get('organizer', ''),
@@ -1265,21 +1323,43 @@ class ScoringApp:
                 try:
                     status, notes, details = verify_against_text(cert_text, student_data)
                     item['ai_status'] = status
-                    item['ai_notes'] = f"[{method}] {notes}"
+                    
+                    if status in ('TERVERIFIKASI', 'PARTIAL_MATCH'):
+                        score, flag = classify_championship(
+                            item.get('championship', ''),
+                            item.get('level', ''),
+                            item.get('organizer', ''),
+                            item.get('cert_name', '')
+                        )
+                        item['nilai'] = str(score)
+                        item['ai_notes'] = f"[{method}] {notes} (Skor: {score})"
+                    else:
+                        item['nilai'] = '0'
+                        item['ai_notes'] = f"[{method}] Mismatch: {notes}"
                 except Exception as e:
                     item['ai_status'] = 'ERROR'
                     item['ai_notes'] = f"Verify logic error: {e}"
+                    item['nilai'] = '0'
             else:
                 item['ai_status'] = 'UNREADABLE'
                 item['ai_notes'] = "No text found in certificate"
+                item['nilai'] = '0'
+                
+            if item.get('nilai'):
+                self.scored_count += 1
                 
             self.root.after(0, self._show_current)
             self._save_session()
             
-        self.root.after(0, lambda: self.status_var.set("AI Verification Complete!"))
+        def _close_dialog():
+            if hasattr(self, 'ai_progress_dialog') and self.ai_progress_dialog.winfo_exists():
+                self.ai_progress_dialog.destroy()
+        self.root.after(0, _close_dialog)
+
+        self.root.after(0, lambda: self.status_var.set("Analisis AI & Otomatisasi Nilai Selesai!"))
         self.root.after(0, self._enable_scoring_buttons)
-        self.root.after(0, lambda: messagebox.showinfo("AI Verification Complete", 
-                                                       "AI verification process has finished for all certificates."))
+        self.root.after(0, lambda: messagebox.showinfo("Selesai", 
+                                                       "Analisis AI dan otomatisasi nilai telah selesai untuk semua berkas."))
 
     def _display_image(self, img):
         try:
@@ -1823,7 +1903,7 @@ class ScoringApp:
                 self.lbl_progress.config(text="No session loaded")
                 for btn in [self.btn_export, self.btn_gallery, self.btn_save, self.btn_skip, self.btn_clear,
                             self.btn_first, self.btn_prev, self.btn_next, self.btn_last,
-                            self.btn_auto_score, self.btn_ai_verify]:
+                            self.btn_ai_verify]:
                     btn.config(state=tk.DISABLED)
 
             if self._delete_session(session_path):
