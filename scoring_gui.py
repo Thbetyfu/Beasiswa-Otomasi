@@ -1192,6 +1192,57 @@ class ScoringApp:
             self.btn_ai_verify.config(state=tk.DISABLED)
             threading.Thread(target=self._ai_verify_worker, daemon=True).start()
 
+    def _ensure_ollama_running(self):
+        """Check if Ollama is running; if not, try to start it in the background."""
+        import requests
+        import subprocess
+        import shutil
+        import os
+        import time
+        ollama_url = "http://localhost:11434"
+        try:
+            requests.get(f"{ollama_url}/api/tags", timeout=2)
+            return True
+        except Exception:
+            pass
+
+        # Ollama is not responding, try to start it
+        ollama_bin = shutil.which("ollama")
+        if not ollama_bin:
+            # Try default Windows path
+            default_path = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")
+            if os.path.exists(default_path):
+                ollama_bin = default_path
+
+        if not ollama_bin:
+            return False
+
+        try:
+            startupinfo = None
+            if os.name == 'nt':
+                # Prevent console window from showing on Windows
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            subprocess.Popen([ollama_bin, "serve"], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL,
+                             startupinfo=startupinfo)
+            
+            # Wait up to 10 seconds for the server to start responding
+            for _ in range(10):
+                time.sleep(1)
+                try:
+                    requests.get(f"{ollama_url}/api/tags", timeout=2)
+                    return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return False
+
     def _ai_verify_worker(self):
         import sys
         import time
@@ -1207,6 +1258,10 @@ class ScoringApp:
             self.root.after(0, lambda: messagebox.showerror("Import Error", f"Gagal mengimpor modul scripts:\n{e}"))
             self.root.after(0, self._enable_scoring_buttons)
             return
+
+        # Ensure Ollama is active
+        self.status_var.set("Memeriksa status layanan AI (Ollama)...")
+        self._ensure_ollama_running()
 
         ollama_url = "http://localhost:11434"
         vision_model = "moondream:latest"
