@@ -1,0 +1,22 @@
+# Python Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Temporary assets and downloaded certificates
+certificates/
+certs_temp/
+sessions/
+exports/
+
+# Excel data and outputs (keeping template if needed, but ignoring private spreadsheets)
+*.xlsx
+!template_penilaian_sertifikat.xlsx
+
+# Local config/IDE files
+.qoder/
+.vscode/
+.idea/
+verify_progress.json
+scratch/
