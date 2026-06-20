@@ -1192,6 +1192,14 @@ class ScoringApp:
             self.btn_ai_verify.config(state=tk.DISABLED)
             threading.Thread(target=self._ai_verify_worker, daemon=True).start()
 
+    def _show_ollama_download_prompt(self):
+        """Prompt user to download Ollama if missing."""
+        if messagebox.askyesno("Ollama Tidak Ditemukan",
+                               "Layanan AI lokal (Ollama) tidak ditemukan di komputer Anda.\n\n"
+                               "Untuk melakukan analisis lokal offline, Anda perlu menginstal Ollama.\n"
+                               "Apakah Anda ingin membuka halaman unduhan Ollama sekarang?"):
+            webbrowser.open("https://ollama.com/download")
+
     def _ensure_ollama_running(self):
         """Check if Ollama is running; if not, try to start it in the background."""
         import requests
@@ -1215,6 +1223,7 @@ class ScoringApp:
                 ollama_bin = default_path
 
         if not ollama_bin:
+            self.root.after(0, self._show_ollama_download_prompt)
             return False
 
         try:
@@ -1243,6 +1252,46 @@ class ScoringApp:
 
         return False
 
+    def _ensure_model_available(self):
+        """Check if moondream is available; if not, pull it via Ollama API and show progress."""
+        import requests
+        import json
+        ollama_url = "http://localhost:11434"
+        vision_model = "moondream:latest"
+        try:
+            r = requests.get(f"{ollama_url}/api/tags", timeout=3)
+            models = [m['name'] for m in r.json().get('models', [])]
+            if vision_model in models or any('moondream' in m for m in models):
+                return True
+        except Exception:
+            return False
+
+        # Model is missing, let's pull it
+        self.status_var.set("Mengunduh model AI moondream (1.7 GB)... Silakan tunggu.")
+        try:
+            payload = {"name": "moondream", "stream": True}
+            r = requests.post(f"{ollama_url}/api/pull", json=payload, stream=True, timeout=600)
+            
+            for line in r.iter_lines():
+                if line:
+                    data = json.loads(line)
+                    status = data.get("status", "")
+                    completed = data.get("completed", 0)
+                    total = data.get("total", 0)
+                    
+                    if total > 0:
+                        pct = int((completed / total) * 100)
+                        self.status_var.set(f"Mengunduh model AI moondream: {pct}% selesai...")
+                    else:
+                        self.status_var.set(f"Mengunduh model AI: {status}")
+            
+            self.status_var.set("Model AI moondream berhasil diunduh!")
+            return True
+        except Exception as e:
+            print(f"Error pulling model: {e}")
+            self.status_var.set(f"Gagal mengunduh model: {e}")
+            return False
+
     def _ai_verify_worker(self):
         import sys
         import time
@@ -1261,7 +1310,17 @@ class ScoringApp:
 
         # Ensure Ollama is active
         self.status_var.set("Memeriksa status layanan AI (Ollama)...")
-        self._ensure_ollama_running()
+        if not self._ensure_ollama_running():
+            self.status_var.set("Layanan AI lokal (Ollama) tidak aktif.")
+            self.root.after(0, self._enable_scoring_buttons)
+            return
+
+        # Ensure model is available
+        self.status_var.set("Memeriksa kesediaan model AI...")
+        if not self._ensure_model_available():
+            self.status_var.set("Model AI tidak tersedia.")
+            self.root.after(0, self._enable_scoring_buttons)
+            return
 
         ollama_url = "http://localhost:11434"
         vision_model = "moondream:latest"
